@@ -1,0 +1,73 @@
+{
+  "1748610162": {
+    "path": "model_20250530_210242.marshal.3",
+    "name": "训练模型_20250530_210242",
+    "created_time": "2025-05-30T21:02:42.938490",
+    "train_files": [
+      "train.csv",
+      "weibo_senti_100k.csv",
+      "训练集.csv"
+    ],
+    "test_files": [
+      "test.csv"
+    ],
+    "train_samples": 35996,
+    "test_accuracy": 0,
+    "neutral_strategy": "split",
+    "notes": "训练时间: 2025-05-30 21:02:42",
+    "file_size": 552365
+  },
+  "1748613176": {
+    "path": "model_20250530_215256.marshal.3",
+    "name": "训练模型_20250530_215256",
+    "created_time": "2025-05-30T21:52:56.989858",
+    "train_files": [
+      "train.csv",
+      "weibo_senti_100k.csv",
+      "训练集.csv"
+    ],
+    "test_files": [
+      "test.csv"
+    ],
+    "train_samples": 155984,
+    "test_accuracy": 0,
+    "neutral_strategy": "balance",
+    "notes": "训练时间: 2025-05-30 21:52:56",
+    "file_size": 552365
+  },
+  "1748616103": {
+    "path": "model_20250530_224143.marshal.3",
+    "name": "训练模型_20250530_224143",
+    "created_time": "2025-05-30T22:41:43.710557",
+    "train_files": [
+      "train.csv",
+      "weibo_senti_100k.csv",
+      "训练集.csv"
+    ],
+    "test_files": [
+      "test.csv"
+    ],
+    "train_samples": 157985,
+    "test_accuracy": 0,
+    "neutral_strategy": "positive",
+    "notes": "训练时间: 2025-05-30 22:41:43",
+    "file_size": 552365
+  },
+  "1748616695": {
+    "path": "model_20250530_225135.marshal.3",
+    "name": "训练模型_20250530_225135",
+    "created_time": "2025-05-30T22:51:35.551394",
+    "train_files": [
+      "train.csv",
+      "训练集.csv"
+    ],
+    "test_files": [
+      "test.csv"
+    ],
+    "train_samples": 37997,
+    "test_accuracy": 0,
+    "neutral_strategy": "positive",
+    "notes": "训练时间: 2025-05-30 22:51:35",
+    "file_size": 552365
+  }
+}
