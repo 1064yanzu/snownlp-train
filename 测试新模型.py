@@ -117,13 +117,12 @@ def dataset_evaluation():
         return None
     
     try:
-        # 读取测试数据
+        # 读取测试数据（自动编码 + 自动分隔符 + 列名兼容）
         print("加载测试数据...")
-        df = pd.read_csv(test_file, encoding='utf-8')
-        
-        if 'content' not in df.columns or 'sentiment' not in df.columns:
-            print("❌ 测试文件缺少必要的列 (content, sentiment)")
-            return None
+        from data_io import read_sentiment_csv
+        result = read_sentiment_csv(test_file)
+        df = result.df
+        print(f"✅ 读取成功: 编码={result.encoding}, 分隔符={repr(result.sep)}")
         
         # 样本数量控制（避免测试时间过长）
         max_samples = 1000
@@ -137,7 +136,9 @@ def dataset_evaluation():
         label_mapping = {
             '负面': 0, '消极': 0, '负向': 0, 'negative': 0,
             '正面': 1, '积极': 1, '正向': 1, 'positive': 1,
-            '中性': 2, '中立': 2, 'neutral': 2
+            '中性': 2, '中立': 2, 'neutral': 2,
+            '0': 0, '1': 1, '2': 2,
+            0: 0, 1: 1, 2: 2,
         }
         
         # 处理测试数据
@@ -146,7 +147,8 @@ def dataset_evaluation():
         
         for _, row in df.iterrows():
             text = str(row['content']).strip()
-            label_str = str(row['sentiment']).strip().lower()
+            label_raw = row['sentiment']
+            label_str = str(label_raw).strip().lower()
             
             if label_str in label_mapping and len(text) > 0:
                 test_texts.append(text)

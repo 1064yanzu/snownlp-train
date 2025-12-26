@@ -8,6 +8,7 @@ import sys
 import os
 import subprocess
 import platform
+import time
 
 def print_banner():
     """打印程序信息"""
@@ -128,14 +129,12 @@ def check_gui_support():
     
     # 检查操作系统
     system = platform.system().lower()
+
+    if system not in {"windows", "darwin", "linux"}:
+        print(f"❓ 未知操作系统: {system}")
+        return False
     
-    if system == "windows":
-        print("✅ Windows环境，支持图形界面")
-        return True
-    elif system == "darwin":  # macOS
-        print("✅ macOS环境，支持图形界面")
-        return True
-    elif system == "linux":
+    if system == "linux":
         # Linux环境需要进一步检查
         print("🐧 Linux环境，检查X11支持...")
         
@@ -146,28 +145,25 @@ def check_gui_support():
             return False
         
         print(f"📺 DISPLAY环境变量: {display}")
-        
-        # 尝试导入tkinter
-        try:
-            import tkinter as tk
-            
-            # 尝试创建一个测试窗口
-            try:
-                root = tk.Tk()
-                root.withdraw()  # 隐藏窗口
-                root.destroy()   # 销毁窗口
-                print("✅ Tkinter测试成功，支持图形界面")
-                return True
-            except Exception as e:
-                print(f"❌ Tkinter测试失败: {e}")
-                return False
-                
-        except ImportError:
-            print("❌ 无法导入tkinter模块")
-            return False
-    else:
-        print(f"❓ 未知操作系统: {system}")
+
+    # 统一进行 tkinter 可用性测试（macOS / Windows / Linux 都可能缺少 _tkinter）
+    try:
+        import tkinter as tk
+    except Exception as e:
+        print(f"❌ 无法导入tkinter模块: {e}")
         return False
+
+    try:
+        root = tk.Tk()
+        root.withdraw()  # 隐藏窗口
+        root.update_idletasks()
+        root.destroy()   # 销毁窗口
+        print("✅ Tkinter测试成功，支持图形界面")
+        return True
+    except Exception as e:
+        print(f"❌ Tkinter测试失败: {e}")
+        return False
+
 
 def launch_gui():
     """启动图形界面"""
@@ -179,12 +175,16 @@ def launch_gui():
             print(f"❌ 找不到GUI文件: {gui_file}")
             return False
         
-        # 使用subprocess启动GUI，避免import阻塞
-        import subprocess
-        result = subprocess.run([sys.executable, gui_file], 
-                              capture_output=False, 
-                              text=True)
-        
+        # 使用子进程启动GUI，避免import阻塞
+        proc = subprocess.Popen([sys.executable, gui_file])
+
+        # 处理“立即崩溃”场景（例如缺少 _tkinter）
+        time.sleep(0.3)
+        rc = proc.poll()
+        if rc is not None and rc != 0:
+            print(f"❌ 图形界面启动失败 (exit code: {rc})")
+            return False
+
         print("✅ 图形界面已启动")
         return True
         
@@ -202,12 +202,15 @@ def launch_cli():
             print(f"❌ 找不到命令行文件: {cli_file}")
             return False
         
-        # 使用subprocess启动CLI
-        import subprocess
-        result = subprocess.run([sys.executable, cli_file], 
-                              capture_output=False, 
-                              text=True)
-        
+        # 使用子进程启动CLI
+        proc = subprocess.Popen([sys.executable, cli_file])
+
+        time.sleep(0.3)
+        rc = proc.poll()
+        if rc is not None and rc != 0:
+            print(f"❌ 命令行界面启动失败 (exit code: {rc})")
+            return False
+
         print("✅ 命令行界面已启动")
         return True
         

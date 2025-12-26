@@ -1,0 +1,39 @@
+/._frontend
+/._src-tauri
+/docs
+._*
+/node_modules
+/frontend/node_modules
+/venv
+
+
+# macOS 自动生成文件
+.DS_Store
+**/.DS_Store
+*.swp
+
+# 构建产物
+/frontend/dist
+/src-tauri/target
+/src-tauri/permissions
+
+# 包管理&缓存
+pnp.mjs
+.pnp.cjs
+.pnp.js
+.pnp.loader.mjs
+.pnp.loader.cjs
+.pnp.loader.js
+.yarn/**
+.npm/**
+.pnpm-store/**
+
+# IDE 配置
+.idea/
+.vscode/
+.turbo/
+
+#施工文件
+CONSTRUCTION.md
+CHANGELOG.md
+施工文档.md

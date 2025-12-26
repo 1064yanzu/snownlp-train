@@ -4,12 +4,24 @@ SnowNLP情感分析训练测试工具 - 可视化界面版
 集成训练、测试、评估的完整GUI工具
 """
 
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
-import pandas as pd
+# 在任何导入之前设置 matplotlib 后端，避免 macOS 版本兼容性问题
 import os
-import time
+os.environ['MPLBACKEND'] = 'Agg'  # 使用非 GUI 后端
+
 import sys
+
+try:
+    import tkinter as tk
+    from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
+except Exception as e:
+    print("❌ 无法启动GUI：当前 Python 环境缺少 Tk 支持（_tkinter）")
+    print(f"详细错误: {e}")
+    print("\n✅ 解决方案（macOS + Homebrew Python 3.12 常见）:")
+    print("1) 安装 Tk 支持: brew install python-tk@3.12")
+    print("2) 或者改用命令行/网页界面: python 启动工具.py")
+    sys.exit(1)
+import pandas as pd
+import time
 import shutil
 import threading
 from snownlp import SnowNLP, sentiment
@@ -19,11 +31,27 @@ from tqdm import tqdm
 import random
 import marshal
 import pickle
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
 import json
 from datetime import datetime
+
+# matplotlib 延迟导入
+plt = None
+FigureCanvasTkAgg = None
+def _import_matplotlib():
+    """延迟导入 matplotlib，在需要时才加载"""
+    global plt, FigureCanvasTkAgg
+    if plt is None:
+        try:
+            import matplotlib
+            matplotlib.use('TkAgg')  # 切换到 TkAgg 后端用于嵌入 Tkinter
+            import matplotlib.pyplot as _plt
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg as _FigureCanvasTkAgg
+            plt = _plt
+            FigureCanvasTkAgg = _FigureCanvasTkAgg
+        except Exception as e:
+            print(f"警告: matplotlib 加载失败 ({e})，图表功能将不可用")
+    return plt, FigureCanvasTkAgg
 
 class ModelManager:
     """模型管理器"""
@@ -1368,35 +1396,14 @@ class SnowNLPTrainerGUI:
                 
                 try:
                     self.log(f"正在加载文件: {path}")
-                    
-                    # 尝试不同编码读取文件
-                    df = None
-                    encodings = ['utf-8', 'gbk', 'gb2312', 'utf-8-sig']
-                    
-                    for encoding in encodings:
-                        try:
-                            df = pd.read_csv(path, encoding=encoding)
-                            self.log(f"成功使用编码 {encoding} 加载文件")
-                            break
-                        except UnicodeDecodeError:
-                            continue
-                    
-                    if df is None:
-                        self.log(f"所有编码尝试失败，跳过文件: {path}")
-                        continue
+
+                    from data_io import read_sentiment_csv
+                    result = read_sentiment_csv(path)
+                    df = result.df
+                    self.log(f"成功加载: 编码={result.encoding}, 分隔符={repr(result.sep)}")
                     
                     self.log(f"成功加载，共 {len(df)} 行数据")
                     total_rows += len(df)
-                    
-                    if 'content' not in df.columns:
-                        self.log(f"警告: 列 'content' 不存在于文件 {path}")
-                        self.log(f"可用列: {list(df.columns)}")
-                        continue
-                        
-                    if 'sentiment' not in df.columns:
-                        self.log(f"警告: 列 'sentiment' 不存在于文件 {path}")
-                        self.log(f"可用列: {list(df.columns)}")
-                        continue
                         
                 except Exception as e:
                     self.log(f"读取文件失败 {path}: {e}")

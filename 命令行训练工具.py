@@ -89,6 +89,7 @@ def find_data_files():
 def load_data_with_progress(filepaths, data_type="数据", neutral_strategy="balance"):
     """加载数据并显示进度"""
     from tqdm import tqdm
+    from data_io import read_sentiment_csv
     
     print(f"\n📂 加载{data_type}文件...")
     print(f"🔧 中性数据处理策略: {neutral_strategy}")
@@ -118,22 +119,12 @@ def load_data_with_progress(filepaths, data_type="数据", neutral_strategy="bal
         if not os.path.exists(path):
             continue
             
-        # 尝试不同编码
-        df = None
-        for encoding in ['utf-8', 'gbk', 'gb2312', 'utf-8-sig']:
-            try:
-                df = pd.read_csv(path, encoding=encoding)
-                print(f"  ✅ {os.path.basename(path)}: 使用编码 {encoding}")
-                break
-            except UnicodeDecodeError:
-                continue
-        
-        if df is None:
-            print(f"  ❌ 无法读取: {path}")
-            continue
-        
-        if 'content' not in df.columns or 'sentiment' not in df.columns:
-            print(f"  ❌ 缺少必要列: {path}")
+        try:
+            result = read_sentiment_csv(path)
+            df = result.df
+            print(f"  ✅ {os.path.basename(path)}: 编码={result.encoding}, 分隔符={repr(result.sep)}")
+        except Exception as e:
+            print(f"  ❌ 无法读取: {path} ({e})")
             continue
         
         total_rows += len(df)
@@ -365,11 +356,12 @@ def evaluate_model(texts, labels, sample_size=1000):
 
 def interactive_test():
     """交互式测试"""
-    from snownlp import SnowNLP
-    
-    print(f"\n🎮 交互式测试模式")
-    print("输入文本进行情感分析，输入 'quit' 退出")
-    print("-" * 50)
+    print("\n🎮 进入交互式测试模式")
+    print("输入 'quit' 或 'exit' 退出")
+
+    if not sys.stdin.isatty():
+        print("⚠️ 当前运行环境不支持交互式输入（stdin 不是 TTY），无法进入交互测试。")
+        return
     
     while True:
         try:
@@ -381,7 +373,7 @@ def interactive_test():
             
             if not text:
                 continue
-            
+            # 情感分析
             s = SnowNLP(text)
             score = s.sentiments
             
@@ -404,11 +396,14 @@ def interactive_test():
             elif score < 0.2:
                 print("  强度: 强烈负面")
             
+        except EOFError:
+            print("\n⚠️ 检测到输入流已关闭（EOF），自动退出交互测试。")
+            break
         except KeyboardInterrupt:
             print("\n👋 退出测试模式")
             break
         except Exception as e:
-            print(f"❌ 分析失败: {e}")
+            print(f"❌ 测试失败: {e}")
 
 def quick_test():
     """快速验证测试"""
@@ -478,6 +473,13 @@ def main():
     
     # 如果没有指定参数，显示菜单
     if not any([args.train, args.test, args.interactive, args.eval]):
+        if not sys.stdin.isatty():
+            print("\n⚠️ 当前运行环境不支持交互式输入（stdin 不是 TTY），无法显示菜单。")
+            print("💡 解决方案:")
+            print("- 在真实终端中运行: python 命令行训练工具.py")
+            print("- 或使用参数模式: --train / --test / --eval / --interactive")
+            return 0
+
         while True:
             print(f"\n🎯 请选择操作:")
             print("1. 🚀 训练新模型")
@@ -510,6 +512,9 @@ def main():
                     continue
                 else:
                     print("❌ 无效选择，请重新输入")
+            except EOFError:
+                print("\n⚠️ 检测到输入流已关闭（EOF），自动退出命令行模式。")
+                break
             except KeyboardInterrupt:
                 print("\n👋 再见!")
                 break
