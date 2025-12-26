@@ -5,6 +5,7 @@
 /node_modules
 /frontend/node_modules
 /venv
+/logs
 
 
 # macOS 自动生成文件

@@ -15,6 +15,11 @@ from datetime import datetime
 import json
 import random
 
+from app_logger import dir_writable, disk_free_bytes, get_log_file_path, get_logger, runtime_summary
+
+CLI_LOGGER = get_logger("cli")
+CLI_LOG_FILE = get_log_file_path(CLI_LOGGER)
+
 def print_banner():
     """打印程序横幅"""
     print("=" * 60)
@@ -235,6 +240,17 @@ def train_model(neg_path, pos_path):
     start_time = time.time()
     
     try:
+        try:
+            CLI_LOGGER.info(
+                "cli_train_begin cwd=%s writable=%s free=%s neg_path=%s pos_path=%s",
+                os.getcwd(),
+                dir_writable(os.getcwd()),
+                disk_free_bytes(os.getcwd()),
+                os.path.abspath(neg_path),
+                os.path.abspath(pos_path),
+            )
+        except Exception:
+            pass
         # 显示进度提示
         print("🔄 SnowNLP核心算法训练中...")
         sentiment.train(neg_path, pos_path)
@@ -251,13 +267,27 @@ def train_model(neg_path, pos_path):
             largest_file = max(model_files, key=os.path.getsize)
             size = os.path.getsize(largest_file)
             print(f"📦 找到模型文件: {largest_file} ({size:,} 字节)")
+            try:
+                CLI_LOGGER.info("cli_model_file_found file=%s size=%s", os.path.abspath(largest_file), size)
+            except Exception:
+                pass
             return largest_file
         else:
             print("❌ 未找到生成的模型文件")
+            try:
+                CLI_LOGGER.error("cli_no_model_file patterns=%s", ['*.marshal*', 'custom_sentiment.*'])
+            except Exception:
+                pass
             return None
             
     except Exception as e:
         print(f"❌ 模型训练失败: {e}")
+        try:
+            CLI_LOGGER.exception("cli_train_failed")
+        except Exception:
+            pass
+        if CLI_LOG_FILE:
+            print(f"📝 详细日志: {CLI_LOG_FILE}")
         return None
 
 def replace_model(model_file):
@@ -270,6 +300,17 @@ def replace_model(model_file):
         sentiment_dir = os.path.join(snownlp_dir, 'sentiment')
         
         print(f"📁 SnowNLP目录: {sentiment_dir}")
+        try:
+            CLI_LOGGER.info(
+                "cli_replace_begin model_file=%s sentiment_dir=%s dir_exists=%s dir_writable=%s free=%s",
+                os.path.abspath(model_file),
+                os.path.abspath(sentiment_dir),
+                os.path.exists(sentiment_dir),
+                dir_writable(sentiment_dir),
+                disk_free_bytes(sentiment_dir),
+            )
+        except Exception:
+            pass
         
         # 查找目标文件
         target_files = []
@@ -280,6 +321,10 @@ def replace_model(model_file):
         
         if not target_files:
             print("❌ 未找到目标模型文件")
+            try:
+                CLI_LOGGER.error("cli_no_target_files sentiment_dir=%s", os.path.abspath(sentiment_dir))
+            except Exception:
+                pass
             return False
         
         # 备份原文件
@@ -296,14 +341,28 @@ def replace_model(model_file):
                 shutil.copy2(model_file, target_file)
                 size = os.path.getsize(target_file)
                 print(f"✅ 替换: {os.path.basename(target_file)} ({size:,} 字节)")
+                try:
+                    CLI_LOGGER.info("cli_replace_ok target=%s size=%s", os.path.abspath(target_file), size)
+                except Exception:
+                    pass
                 success_count += 1
             except Exception as e:
                 print(f"❌ 替换失败 {os.path.basename(target_file)}: {e}")
+                try:
+                    CLI_LOGGER.exception("cli_replace_failed target=%s", os.path.abspath(target_file))
+                except Exception:
+                    pass
         
         return success_count > 0
         
     except Exception as e:
         print(f"❌ 模型部署失败: {e}")
+        try:
+            CLI_LOGGER.exception("cli_replace_exception")
+        except Exception:
+            pass
+        if CLI_LOG_FILE:
+            print(f"📝 详细日志: {CLI_LOG_FILE}")
         return False
 
 def evaluate_model(texts, labels, sample_size=1000):
@@ -455,6 +514,17 @@ def quick_test():
 
 def main():
     """主函数"""
+    try:
+        CLI_LOGGER.info("cli_start runtime=%s", runtime_summary())
+        CLI_LOGGER.info(
+            "cli_env cwd=%s writable=%s free=%s logs_writable=%s",
+            os.getcwd(),
+            dir_writable(os.getcwd()),
+            disk_free_bytes(os.getcwd()),
+            dir_writable("logs"),
+        )
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(description="SnowNLP情感分析训练工具 - 命令行版本")
     parser.add_argument('--train', action='store_true', help='执行模型训练')
     parser.add_argument('--test', action='store_true', help='快速验证测试')
@@ -466,6 +536,8 @@ def main():
     args = parser.parse_args()
     
     print_banner()
+    if CLI_LOG_FILE:
+        print(f"📝 日志文件: {CLI_LOG_FILE}")
     
     # 检查依赖
     if not check_dependencies():

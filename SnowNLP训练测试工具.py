@@ -9,6 +9,7 @@ import os
 os.environ['MPLBACKEND'] = 'Agg'  # 使用非 GUI 后端
 
 import sys
+import subprocess
 
 try:
     import tkinter as tk
@@ -34,6 +35,8 @@ import pickle
 import numpy as np
 import json
 from datetime import datetime
+
+from app_logger import dir_writable, disk_free_bytes, get_log_file_path, get_logger, runtime_summary
 
 # matplotlib 延迟导入
 plt = None
@@ -135,6 +138,13 @@ class SnowNLPTrainerGUI:
         self.test_files = []
         self.neutral_strategy = tk.StringVar(value="balance")
         self.training_running = False
+        
+        self.logger = get_logger("gui")
+        self.log_file = get_log_file_path(self.logger)
+        try:
+            self.logger.info("gui_start runtime=%s", runtime_summary())
+        except Exception:
+            pass
         
         # 模型管理器
         self.model_manager = ModelManager()
@@ -324,6 +334,8 @@ class SnowNLPTrainerGUI:
             row=0, column=1, padx=5, pady=5)
         ttk.Button(tool_frame, text="🧹 清空日志\n(清理界面)", command=self.clear_log).grid(
             row=0, column=2, padx=5, pady=5)
+        ttk.Button(tool_frame, text="📂 打开日志\n(查看日志文件)", command=self.open_log_dir).grid(
+            row=0, column=3, padx=5, pady=5)
         
         # 模型管理按钮
         model_frame = ttk.LabelFrame(button_frame, text="📦 模型管理")
@@ -479,7 +491,7 @@ class SnowNLPTrainerGUI:
 
 您即将进行模型测试操作！
 
-⚠️ 系统将临时替换当前模型
+⚠️ 系统将临时替换模型进行测试
 ⚠️ 请确保选择正确的模型文件
 ⚠️ 测试期间请勿关闭程序
 
@@ -1018,10 +1030,33 @@ class SnowNLPTrainerGUI:
     
     def log(self, message):
         """添加日志"""
+        msg = str(message)
         timestamp = time.strftime("[%H:%M:%S]")
-        self.log_text.insert(tk.END, f"{timestamp} {message}\n")
+        self.log_text.insert(tk.END, f"{timestamp} {msg}\n")
         self.log_text.see(tk.END)
         self.root.update()
+        try:
+            self.logger.info("%s", msg)
+        except Exception:
+            pass
+
+    def open_log_dir(self):
+        path = os.path.abspath("logs")
+        try:
+            os.makedirs(path, exist_ok=True)
+            if sys.platform.startswith("win"):
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+            self.log(f"📂 已打开日志目录: {path}")
+        except Exception as e:
+            self.log(f"❌ 打开日志目录失败: {e}")
+            try:
+                self.logger.exception("open_log_dir_failed path=%s", path)
+            except Exception:
+                pass
     
     def update_progress(self, value=None, text=None):
         """更新进度 - 兼容性方法"""
@@ -1139,6 +1174,21 @@ class SnowNLPTrainerGUI:
         import datetime
         
         try:
+            try:
+                cwd = os.getcwd()
+                self.logger.info(
+                    "training_begin cwd=%s writable=%s free=%s logs_writable=%s train_files=%s test_files=%s neutral=%s",
+                    cwd,
+                    dir_writable(cwd),
+                    disk_free_bytes(cwd),
+                    dir_writable("logs"),
+                    [os.path.basename(p) for p in getattr(self, "train_files", [])],
+                    [os.path.basename(p) for p in getattr(self, "test_files", [])],
+                    self.neutral_strategy.get(),
+                )
+            except Exception:
+                pass
+
             # 初始化训练状态
             self.training_start_time = datetime.datetime.now()
             self.start_time_var.set(self.training_start_time.strftime("%H:%M:%S"))
@@ -1256,7 +1306,9 @@ class SnowNLPTrainerGUI:
                 self.log("❌ 模型训练失败")
                 self.update_training_status("failed")
                 self.update_step_status(3, 0, False, True)  # 显示失败状态
-                messagebox.showerror("训练失败", "❌ 模型训练失败\n\n请检查:\n• 数据文件格式是否正确\n• 是否有足够的正负面样本\n• 查看日志了解详细错误")
+                log_hint = self.log_file or os.path.abspath("logs")
+                messagebox.showerror("训练失败", 
+                    f"❌ 模型训练失败\n\n请检查:\n• 数据文件格式是否正确\n• 是否有足够的正负面样本\n• 查看日志了解详细错误\n\n日志位置:\n{log_hint}")
                 return
             
             self.update_enhanced_progress(75, 100, "模型训练完成")
@@ -1334,7 +1386,9 @@ class SnowNLPTrainerGUI:
             import traceback
             self.log(f"详细错误: {traceback.format_exc()}")
             
-            messagebox.showerror("训练异常", f"❌ 训练过程出现异常:\n{e}\n\n建议:\n• 检查数据文件完整性\n• 重启程序后重试\n• 查看日志了解详细信息")
+            log_hint = self.log_file or os.path.abspath("logs")
+            messagebox.showerror("训练异常", 
+                f"❌ 训练过程出现异常:\n{e}\n\n建议:\n• 检查数据文件完整性\n• 重启程序后重试\n• 查看日志了解详细信息\n\n日志位置:\n{log_hint}")
         finally:
             self.training_running = False
             self.train_btn.config(state="normal")
@@ -1572,6 +1626,17 @@ class SnowNLPTrainerGUI:
         """训练并替换模型"""
         try:
             self.log("🔧 开始模型训练和替换...")
+            try:
+                self.logger.info(
+                    "train_replace_begin cwd=%s writable=%s free=%s neg_path=%s pos_path=%s",
+                    os.getcwd(),
+                    dir_writable(os.getcwd()),
+                    disk_free_bytes(os.getcwd()),
+                    os.path.abspath(neg_path),
+                    os.path.abspath(pos_path),
+                )
+            except Exception:
+                pass
             
             # 1. 先进行基础训练
             self.log("正在训练模型...")
@@ -1587,6 +1652,16 @@ class SnowNLPTrainerGUI:
             ]
             
             source_file = None
+            try:
+                for fname in possible_model_files:
+                    fpath = os.path.abspath(fname)
+                    if os.path.exists(fname):
+                        self.logger.info("candidate_model_exists file=%s size=%s", fpath, os.path.getsize(fname))
+                    else:
+                        self.logger.info("candidate_model_missing file=%s", fpath)
+            except Exception:
+                pass
+
             for fname in possible_model_files:
                 if os.path.exists(fname):
                     source_file = fname
@@ -1595,6 +1670,10 @@ class SnowNLPTrainerGUI:
             
             if not source_file:
                 self.log("❌ 未找到训练生成的模型文件")
+                try:
+                    self.logger.error("no_generated_model_file candidates=%s", [os.path.abspath(p) for p in possible_model_files])
+                except Exception:
+                    pass
                 return False
             
             # 3. 检查源文件
@@ -1609,6 +1688,15 @@ class SnowNLPTrainerGUI:
             model_copy = f"model_{timestamp}.marshal.3"
             shutil.copy2(source_file, model_copy)
             self.log(f"✅ 创建模型副本: {model_copy}")
+            try:
+                self.logger.info(
+                    "model_copy_created src=%s dst=%s size=%s",
+                    os.path.abspath(source_file),
+                    os.path.abspath(model_copy),
+                    os.path.getsize(model_copy),
+                )
+            except Exception:
+                pass
             
             # 5. 获取SnowNLP系统路径
             import snownlp
@@ -1616,6 +1704,16 @@ class SnowNLPTrainerGUI:
             sentiment_dir = os.path.join(snownlp_dir, 'sentiment')
             
             self.log(f"SnowNLP系统路径: {sentiment_dir}")
+            try:
+                self.logger.info(
+                    "snownlp_sentiment_dir dir=%s exists=%s writable=%s free=%s",
+                    os.path.abspath(sentiment_dir),
+                    os.path.exists(sentiment_dir),
+                    dir_writable(sentiment_dir),
+                    disk_free_bytes(sentiment_dir),
+                )
+            except Exception:
+                pass
             
             # 6. 查找目标文件
             target_files = []
@@ -1627,6 +1725,13 @@ class SnowNLPTrainerGUI:
             
             if not target_files:
                 self.log("❌ 未找到目标模型文件")
+                try:
+                    self.logger.error(
+                        "no_target_model_files sentiment_dir=%s",
+                        os.path.abspath(sentiment_dir),
+                    )
+                except Exception:
+                    pass
                 return False
             
             # 7. 备份原文件
@@ -1646,10 +1751,22 @@ class SnowNLPTrainerGUI:
                     new_size = os.path.getsize(target_file)
                     fname = os.path.basename(target_file)
                     self.log(f"✅ 模型替换成功: {fname} ({new_size:,} 字节)")
+                    try:
+                        self.logger.info(
+                            "model_replace_ok target=%s size=%s",
+                            os.path.abspath(target_file),
+                            new_size,
+                        )
+                    except Exception:
+                        pass
                     success_count += 1
                 except Exception as e:
                     fname = os.path.basename(target_file)
                     self.log(f"❌ 模型替换失败 {fname}: {e}")
+                    try:
+                        self.logger.exception("model_replace_failed target=%s", os.path.abspath(target_file))
+                    except Exception:
+                        pass
             
             if success_count > 0:
                 # 9. 保存模型到管理器
@@ -1675,6 +1792,10 @@ class SnowNLPTrainerGUI:
             self.log(f"❌ 模型训练替换失败: {e}")
             import traceback
             self.log(f"详细错误: {traceback.format_exc()}")
+            try:
+                self.logger.exception("train_and_replace_model_exception")
+            except Exception:
+                pass
             return False
     
     def evaluate_model_simple(self, test_texts, test_labels):

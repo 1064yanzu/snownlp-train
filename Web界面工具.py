@@ -14,6 +14,14 @@ import threading
 import pandas as pd
 from glob import glob
 
+from app_logger import get_logger, runtime_summary
+
+WEB_LOGGER = get_logger("web")
+try:
+    WEB_LOGGER.info("web_start runtime=%s", runtime_summary())
+except Exception:
+    pass
+
 # 检查并安装Flask
 try:
     import flask
@@ -40,6 +48,10 @@ def log_message(message):
     log_entry = f"{timestamp} {message}"
     training_status['log'].append(log_entry)
     print(log_entry)
+    try:
+        WEB_LOGGER.info("%s", str(message))
+    except Exception:
+        pass
 
 # HTML模板
 HTML_TEMPLATE = """
@@ -609,6 +621,15 @@ def api_train():
             training_status['progress'] = 0
             training_status['message'] = '开始训练...'
             training_status['log'] = []
+
+            try:
+                WEB_LOGGER.info(
+                    "web_training_begin neutral_strategy=%s cwd=%s",
+                    neutral_strategy,
+                    os.getcwd(),
+                )
+            except Exception:
+                pass
             
             log_message("🚀 开始模型训练流程...")
             
@@ -692,6 +713,10 @@ def api_train():
         except Exception as e:
             log_message(f"❌ 训练异常: {e}")
             training_status['message'] = f'训练异常: {e}'
+            try:
+                WEB_LOGGER.exception("web_training_exception")
+            except Exception:
+                pass
         finally:
             training_status['running'] = False
     
