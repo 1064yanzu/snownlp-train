@@ -25,8 +25,29 @@ import pandas as pd
 import time
 import shutil
 import threading
-from snownlp import SnowNLP, sentiment
-from snownlp.sentiment import Sentiment
+from snownlp_model_utils import (
+    collect_snownlp_model_status,
+    get_snownlp_sentiment_dir,
+    log_model_status,
+    restore_from_backup,
+    safe_replace_snownlp_model,
+    validate_marshal_model_file,
+)
+try:
+    from snownlp import SnowNLP, sentiment
+    from snownlp.sentiment import Sentiment
+except Exception as e:
+    print("❌ SnowNLP 导入失败，可能是 sentiment 模型文件损坏或与当前 Python 不兼容")
+    print(f"详细错误: {e}")
+    sentiment_dir = get_snownlp_sentiment_dir()
+    if sentiment_dir:
+        print(f"📁 检测到 SnowNLP sentiment 目录: {sentiment_dir}")
+        print("💡 你可以尝试以下恢复方式：")
+        print("1) 若目录下存在 sentiment.marshal.3.backup_gui（或 sentiment.marshal.backup_gui），将其复制回原文件名")
+        print("2) 或重装 snownlp（会恢复官方模型文件）")
+    else:
+        print("⚠️ 未定位到 SnowNLP 安装目录，请确认 snownlp 已安装")
+    sys.exit(1)
 from glob import glob
 from tqdm import tqdm
 import random
@@ -143,6 +164,12 @@ class SnowNLPTrainerGUI:
         self.log_file = get_log_file_path(self.logger)
         try:
             self.logger.info("gui_start runtime=%s", runtime_summary())
+        except Exception:
+            pass
+
+        try:
+            status = collect_snownlp_model_status(replace_legacy_py2_file=False)
+            log_model_status(self.logger, status, event="gui_start")
         except Exception:
             pass
         
@@ -330,6 +357,8 @@ class SnowNLPTrainerGUI:
         
         ttk.Button(tool_frame, text="ℹ️ 模型信息\n(查看当前模型)", command=self.show_model_info).grid(
             row=0, column=0, padx=5, pady=5)
+        ttk.Button(tool_frame, text="↩️ 回滚备份\n(恢复系统模型)", command=self.rollback_model_with_confirm).grid(
+            row=1, column=0, padx=5, pady=5)
         ttk.Button(tool_frame, text="🔄 手动替换\n(安装训练模型)", command=self.manual_replace_with_info).grid(
             row=0, column=1, padx=5, pady=5)
         ttk.Button(tool_frame, text="🧹 清空日志\n(清理界面)", command=self.clear_log).grid(
@@ -732,6 +761,7 @@ class SnowNLPTrainerGUI:
         # 创建Notebook用于分页显示
         notebook = ttk.Notebook(parent)
         notebook.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        self.notebook = notebook
         
         # 日志页面
         log_frame = ttk.Frame(notebook)
@@ -750,10 +780,18 @@ class SnowNLPTrainerGUI:
         # 结果页面
         result_frame = ttk.Frame(notebook)
         notebook.add(result_frame, text="📈 测试结果")
+        self.result_frame = result_frame
         
         # 创建结果显示区域
         self.result_text = scrolledtext.ScrolledText(result_frame, height=15, width=80)
         self.result_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+    def _show_in_result_tab(self):
+        try:
+            if hasattr(self, "notebook") and hasattr(self, "result_frame"):
+                self.notebook.select(self.result_frame)
+        except Exception:
+            pass
     
     def create_enhanced_progress_display(self, parent):
         """创建增强的进度显示界面"""
@@ -1300,6 +1338,12 @@ class SnowNLPTrainerGUI:
             self.update_enhanced_progress(60, 30, "SnowNLP核心算法训练中...")
             self.update_step_status(3, 30)
             
+            try:
+                status = collect_snownlp_model_status(replace_legacy_py2_file=False)
+                log_model_status(self.logger, status, event="train_replace_before")
+            except Exception:
+                pass
+
             success = self.train_and_replace_model(neg_path, pos_path)
             
             if not success:
@@ -1374,6 +1418,12 @@ class SnowNLPTrainerGUI:
                 "📊 可以使用测试功能验证效果\n" +
                 "🔄 建议重启程序以确保使用新模型")
                 
+            try:
+                status = collect_snownlp_model_status(replace_legacy_py2_file=False)
+                log_model_status(self.logger, status, event="train_replace_after")
+            except Exception:
+                pass
+            
         except Exception as e:
             self.log(f"❌ 训练过程出错: {e}")
             self.update_training_status("failed")
@@ -1643,14 +1693,30 @@ class SnowNLPTrainerGUI:
             sentiment.train(neg_path, pos_path)
             self.log("✅ 模型训练完成")
             
+            try:
+                sentiment.save("custom_sentiment.marshal")
+                saved_name = "custom_sentiment.marshal.3" if sys.version_info[0] >= 3 else "custom_sentiment.marshal"
+                if os.path.exists(saved_name):
+                    self.log(f"✅ 模型文件已保存: {saved_name} ({os.path.getsize(saved_name):,} 字节)")
+                else:
+                    self.log(f"⚠️ 已调用保存，但未找到输出文件: {saved_name}")
+            except Exception as e:
+                self.log(f"⚠️ 模型保存失败（将尝试继续扫描候选文件）: {e}")
+
             # 2. 查找生成的模型文件
-            possible_model_files = [
-                'custom_sentiment.marshal.3',
-                'sentiment.marshal',
-                'sentiment.marshal.3',
-                'custom_sentiment.model'
-            ]
-            
+            if sys.version_info[0] >= 3:
+                possible_model_files = [
+                    'custom_sentiment.marshal.3',
+                    'sentiment.marshal.3',
+                    'custom_sentiment.model'
+                ]
+            else:
+                possible_model_files = [
+                    'custom_sentiment.marshal',
+                    'sentiment.marshal',
+                    'custom_sentiment.model'
+                ]
+
             source_file = None
             try:
                 for fname in possible_model_files:
@@ -1663,10 +1729,16 @@ class SnowNLPTrainerGUI:
                 pass
 
             for fname in possible_model_files:
-                if os.path.exists(fname):
-                    source_file = fname
-                    self.log(f"找到训练生成的模型文件: {fname}")
-                    break
+                if not os.path.exists(fname):
+                    continue
+                if fname.endswith('.marshal') or fname.endswith('.marshal.3'):
+                    err = validate_marshal_model_file(fname)
+                    if err:
+                        self.log(f"⚠️ 跳过无效模型文件 {fname}: {err}")
+                        continue
+                source_file = fname
+                self.log(f"找到训练生成的模型文件: {fname}")
+                break
             
             if not source_file:
                 self.log("❌ 未找到训练生成的模型文件")
@@ -1685,7 +1757,7 @@ class SnowNLPTrainerGUI:
             
             # 4. 创建带时间戳的模型副本
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            model_copy = f"model_{timestamp}.marshal.3"
+            model_copy = f"model_{timestamp}.marshal.3" if sys.version_info[0] >= 3 else f"model_{timestamp}.marshal"
             shutil.copy2(source_file, model_copy)
             self.log(f"✅ 创建模型副本: {model_copy}")
             try:
@@ -1699,74 +1771,56 @@ class SnowNLPTrainerGUI:
                 pass
             
             # 5. 获取SnowNLP系统路径
-            import snownlp
-            snownlp_dir = os.path.dirname(snownlp.__file__)
-            sentiment_dir = os.path.join(snownlp_dir, 'sentiment')
-            
+            sentiment_dir = get_snownlp_sentiment_dir()
             self.log(f"SnowNLP系统路径: {sentiment_dir}")
             try:
                 self.logger.info(
                     "snownlp_sentiment_dir dir=%s exists=%s writable=%s free=%s",
-                    os.path.abspath(sentiment_dir),
-                    os.path.exists(sentiment_dir),
-                    dir_writable(sentiment_dir),
-                    disk_free_bytes(sentiment_dir),
+                    os.path.abspath(sentiment_dir) if sentiment_dir else None,
+                    os.path.exists(sentiment_dir) if sentiment_dir else False,
+                    dir_writable(sentiment_dir) if sentiment_dir else False,
+                    disk_free_bytes(sentiment_dir) if sentiment_dir else None,
                 )
             except Exception:
                 pass
-            
-            # 6. 查找目标文件
-            target_files = []
-            for fname in ['sentiment.marshal', 'sentiment.marshal.3']:
-                fpath = os.path.join(sentiment_dir, fname)
-                if os.path.exists(fpath):
-                    target_files.append(fpath)
-                    self.log(f"找到目标文件: {fname}")
-            
-            if not target_files:
-                self.log("❌ 未找到目标模型文件")
+
+            if not sentiment_dir or not os.path.exists(sentiment_dir):
+                self.log("❌ 未定位到 SnowNLP sentiment 目录")
+                return False
+
+            try:
+                status = collect_snownlp_model_status(replace_legacy_py2_file=False)
+                log_model_status(self.logger, status, event="train_replace_before")
+            except Exception:
+                pass
+
+            replace_result = safe_replace_snownlp_model(
+                source_model_file=source_file,
+                sentiment_dir=sentiment_dir,
+                replace_legacy_py2_file=False,
+                logger=self.logger,
+            )
+
+            if not replace_result.success:
+                self.log(f"❌ 模型替换失败: {replace_result.error}")
+                return False
+
+            success_count = len(replace_result.replaced_files)
+            for fname in replace_result.replaced_files:
+                target_path = os.path.join(sentiment_dir, fname)
                 try:
-                    self.logger.error(
-                        "no_target_model_files sentiment_dir=%s",
-                        os.path.abspath(sentiment_dir),
+                    new_size = os.path.getsize(target_path)
+                except Exception:
+                    new_size = 0
+                self.log(f"✅ 模型替换成功: {fname} ({new_size:,} 字节)")
+                try:
+                    self.logger.info(
+                        "model_replace_ok target=%s size=%s",
+                        os.path.abspath(target_path),
+                        new_size,
                     )
                 except Exception:
                     pass
-                return False
-            
-            # 7. 备份原文件
-            for target_file in target_files:
-                backup_file = target_file + '.backup_gui'
-                if not os.path.exists(backup_file):
-                    shutil.copy2(target_file, backup_file)
-                    self.log(f"✅ 创建备份: {os.path.basename(backup_file)}")
-                else:
-                    self.log(f"备份已存在: {os.path.basename(backup_file)}")
-            
-            # 8. 复制新模型到系统位置
-            success_count = 0
-            for target_file in target_files:
-                try:
-                    shutil.copy2(source_file, target_file)
-                    new_size = os.path.getsize(target_file)
-                    fname = os.path.basename(target_file)
-                    self.log(f"✅ 模型替换成功: {fname} ({new_size:,} 字节)")
-                    try:
-                        self.logger.info(
-                            "model_replace_ok target=%s size=%s",
-                            os.path.abspath(target_file),
-                            new_size,
-                        )
-                    except Exception:
-                        pass
-                    success_count += 1
-                except Exception as e:
-                    fname = os.path.basename(target_file)
-                    self.log(f"❌ 模型替换失败 {fname}: {e}")
-                    try:
-                        self.logger.exception("model_replace_failed target=%s", os.path.abspath(target_file))
-                    except Exception:
-                        pass
             
             if success_count > 0:
                 # 9. 保存模型到管理器
@@ -2021,20 +2075,19 @@ class SnowNLPTrainerGUI:
                     self.result_text.insert(tk.END, f"✅ 用户选择采样测试({max_samples}个样本)\n")
                 else:  # 用户选择全部测试
                     self.result_text.insert(tk.END, f"✅ 用户选择测试全部数据({len(test_texts)}个样本)\n")
-            
+        
             # 根据用户选择进行采样
             if use_sampling and len(test_texts) > max_samples:
                 indices = random.sample(range(len(test_texts)), max_samples)
                 test_texts = [test_texts[i] for i in indices]
                 test_labels = [test_labels[i] for i in indices]
                 self.result_text.insert(tk.END, f"已随机采样 {len(test_texts)} 个样本进行测试\n")
-            
-            # 统计标签分布
-            pos_count = sum(1 for label in test_labels if label == 1)
-            neg_count = sum(1 for label in test_labels if label == 0)
-            
-            self.result_text.insert(tk.END, f"数据分布: 正面 {pos_count}, 负面 {neg_count}\n")
+        
+            # 开始评估
             self.result_text.insert(tk.END, "开始评估...\n")
+            
+            correct = 0
+            total_processed = 0
             
             # 添加预估时间
             if len(test_texts) > 1000:
@@ -2044,9 +2097,6 @@ class SnowNLPTrainerGUI:
             self.root.update()
             
             # 评估
-            correct = 0
-            total_processed = 0
-            
             for i, (text, true_label) in enumerate(zip(test_texts, test_labels)):
                 try:
                     s = SnowNLP(text)
@@ -2070,84 +2120,151 @@ class SnowNLPTrainerGUI:
                     continue
             
             accuracy = correct / total_processed if total_processed > 0 else 0
-            self.result_text.insert(tk.END, f"\n📊 数据集测试结果: {correct}/{total_processed} 正确，准确率: {accuracy:.2%}\n")
             
+            # 计算各类别准确率
+            pos_correct = neg_correct = 0
+            pos_total = neg_total = 0
+            
+            for text, true_label in zip(test_texts, test_labels):
+                try:
+                    s = SnowNLP(text)
+                    score = s.sentiments
+                    pred_label = 1 if score > 0.5 else 0
+                    
+                    if true_label == 1:
+                        pos_total += 1
+                        if pred_label == 1:
+                            pos_correct += 1
+                    else:
+                        neg_total += 1
+                        if pred_label == 0:
+                            neg_correct += 1
+                except:
+                    continue
+            
+            pos_acc = pos_correct / pos_total if pos_total > 0 else 0
+            neg_acc = neg_correct / neg_total if neg_total > 0 else 0
+            
+            # 显示详细结果
+            self.result_text.insert(tk.END, f"\n📊 详细测试结果:\n")
+            self.result_text.insert(tk.END, f"处理样本数: {total_processed}/{len(test_texts)}\n")
+            self.result_text.insert(tk.END, f"总体准确率: {accuracy:.2%} ({correct}/{total_processed})\n")
+            self.result_text.insert(tk.END, f"正面准确率: {pos_acc:.2%} ({pos_correct}/{pos_total})\n")
+            self.result_text.insert(tk.END, f"负面准确率: {neg_acc:.2%} ({neg_correct}/{neg_total})\n")
+            
+            # 添加更详细的统计
             if total_processed != len(test_texts):
                 success_rate = total_processed / len(test_texts)
                 self.result_text.insert(tk.END, f"处理成功率: {success_rate:.2%}\n")
             
+            if accuracy >= 0.8:
+                self.result_text.insert(tk.END, "\n🎉 在该数据集上表现优秀！\n")
+            elif accuracy >= 0.6:
+                self.result_text.insert(tk.END, "\n👍 在该数据集上表现良好！\n")
+            elif accuracy >= 0.4:
+                self.result_text.insert(tk.END, "\n😐 在该数据集上表现一般\n")
+            else:
+                self.result_text.insert(tk.END, "\n😞 在该数据集上表现较差\n")
+
             return accuracy
-            
+
         except Exception as e:
             self.result_text.insert(tk.END, f"❌ 数据集测试失败: {e}\n")
             return None
     
-    def dataset_evaluation(self):
-        """数据集评估"""
-        if not self.test_files:
-            messagebox.showwarning("提示", "请先选择测试数据文件")
-            return
-        
-        # 在新线程中执行
-        eval_thread = threading.Thread(target=self.run_dataset_test_display)
-        eval_thread.daemon = True
-        eval_thread.start()
-    
-    def run_dataset_test_display(self):
-        """运行数据集测试并显示"""
-        self.result_text.delete(1.0, tk.END)
-        self.result_text.insert(tk.END, "📊 数据集评估\n" + "="*50 + "\n\n")
-        accuracy = self.run_dataset_test()
-        
-        if accuracy is not None:
-            if accuracy >= 0.8:
-                self.result_text.insert(tk.END, "🎉 优秀！模型表现很好\n")
-            elif accuracy >= 0.6:
-                self.result_text.insert(tk.END, "👍 良好！模型表现不错\n")
-            elif accuracy >= 0.4:
-                self.result_text.insert(tk.END, "😐 一般！模型需要改进\n")
-            else:
-                self.result_text.insert(tk.END, "😞 较差！建议重新训练\n")
-    
     def show_model_info(self):
         """显示模型信息"""
+        if getattr(self, "_model_info_busy", False):
+            return
+        self._model_info_busy = True
+
+        self._show_in_result_tab()
         self.result_text.delete(1.0, tk.END)
         self.result_text.insert(tk.END, "ℹ️ SnowNLP模型信息\n" + "="*50 + "\n\n")
         
         try:
-            import snownlp
-            snownlp_dir = os.path.dirname(snownlp.__file__)
-            sentiment_dir = os.path.join(snownlp_dir, 'sentiment')
-            
-            self.result_text.insert(tk.END, f"SnowNLP安装路径: {snownlp_dir}\n")
-            self.result_text.insert(tk.END, f"Sentiment模块路径: {sentiment_dir}\n\n")
-            
-            # 检查模型文件
-            model_files = ['sentiment.marshal', 'sentiment.marshal.3']
-            for fname in model_files:
-                fpath = os.path.join(sentiment_dir, fname)
-                if os.path.exists(fpath):
-                    size = os.path.getsize(fpath)
-                    mtime = os.path.getmtime(fpath)
-                    mtime_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime))
-                    self.result_text.insert(tk.END, f"模型文件: {fname}\n")
-                    self.result_text.insert(tk.END, f"  大小: {size:,} 字节\n")
-                    self.result_text.insert(tk.END, f"  修改时间: {mtime_str}\n")
-                    
-                    # 检查备份文件
-                    backup_files = [f for f in os.listdir(sentiment_dir) if fname in f and 'backup' in f]
-                    if backup_files:
-                        self.result_text.insert(tk.END, f"  备份文件: {len(backup_files)} 个\n")
-                    self.result_text.insert(tk.END, "\n")
-            
-            # 快速测试
+            status = collect_snownlp_model_status(replace_legacy_py2_file=False)
+            try:
+                log_model_status(self.logger, status, event="gui_show_model_info")
+            except Exception:
+                pass
+
+            self.result_text.insert(tk.END, f"Python: {status.get('python_executable')}\n")
+            self.result_text.insert(tk.END, f"Python版本: {status.get('python_version')}\n")
+            self.result_text.insert(tk.END, f"SnowNLP安装位置: {status.get('snownlp_origin')}\n")
+            self.result_text.insert(tk.END, f"Sentiment目录: {status.get('sentiment_dir')}\n\n")
+
+            files = status.get('files', [])
+            if not files:
+                self.result_text.insert(tk.END, "⚠️ 未发现模型文件\n")
+                return
+
+            for f in files:
+                self.result_text.insert(tk.END, f"模型文件: {getattr(f, 'name', '')}\n")
+                self.result_text.insert(tk.END, f"  路径: {getattr(f, 'path', '')}\n")
+                self.result_text.insert(tk.END, f"  存在: {getattr(f, 'exists', False)}\n")
+                self.result_text.insert(tk.END, f"  大小: {getattr(f, 'size', 0):,} 字节\n")
+                self.result_text.insert(tk.END, f"  修改时间: {getattr(f, 'mtime_str', None)}\n")
+                self.result_text.insert(tk.END, f"  备份: {getattr(f, 'backup_exists', False)}\n")
+                if getattr(f, 'backup_exists', False):
+                    self.result_text.insert(tk.END, f"  备份路径: {getattr(f, 'backup_path', '')}\n")
+                self.result_text.insert(tk.END, f"  校验: {getattr(f, 'valid', None)}\n")
+                if getattr(f, 'validate_error', None):
+                    self.result_text.insert(tk.END, f"  校验错误: {getattr(f, 'validate_error', '')}\n")
+                self.result_text.insert(tk.END, "\n")
+
             test_text = "这是一个测试文本"
             s = SnowNLP(test_text)
             score = s.sentiments
             self.result_text.insert(tk.END, f"快速测试: '{test_text}' → {score:.4f}\n")
-            
+
+            self.result_text.see(tk.END)
+            self.root.update_idletasks()
+
         except Exception as e:
             self.result_text.insert(tk.END, f"❌ 获取模型信息失败: {e}\n")
+        finally:
+            self._model_info_busy = False
+
+    def rollback_model_with_confirm(self):
+        if getattr(self, "_model_info_busy", False):
+            return
+        self._model_info_busy = True
+
+        if not messagebox.askyesno(
+            "确认回滚",
+            "将尝试用 .backup_gui 恢复系统 SnowNLP 模型文件。\n\n确认继续吗？",
+        ):
+            self._model_info_busy = False
+            return
+
+        self._show_in_result_tab()
+        self.result_text.delete(1.0, tk.END)
+        self.result_text.insert(tk.END, "↩️ 回滚模型\n" + "="*50 + "\n\n")
+        try:
+            sentiment_dir = get_snownlp_sentiment_dir()
+            if not sentiment_dir:
+                self.result_text.insert(tk.END, "❌ 未定位到 SnowNLP sentiment 目录\n")
+                return
+
+            result = restore_from_backup(sentiment_dir)
+            if result.success:
+                self.result_text.insert(tk.END, f"✅ 回滚成功: {result.replaced_files}\n")
+            else:
+                self.result_text.insert(tk.END, f"❌ 回滚失败: {result.error}\n")
+
+            try:
+                status = collect_snownlp_model_status(replace_legacy_py2_file=False)
+                log_model_status(self.logger, status, event="gui_rollback")
+            except Exception:
+                pass
+
+            self.result_text.see(tk.END)
+            self.root.update_idletasks()
+        except Exception as e:
+            self.result_text.insert(tk.END, f"❌ 回滚异常: {e}\n")
+        finally:
+            self._model_info_busy = False
     
     def analyze_text(self):
         """分析输入文本的情感"""
@@ -2315,7 +2432,7 @@ class SnowNLPTrainerGUI:
             self.result_text.insert(tk.END, f"已随机采样 {len(test_texts)} 个样本进行测试\n")
         
         # 开始评估
-        self.result_text.insert(tk.END, "开始评估当前模型...\n")
+        self.result_text.insert(tk.END, "开始评估...\n")
         
         correct = 0
         total_processed = 0
@@ -2325,6 +2442,9 @@ class SnowNLPTrainerGUI:
             estimated_time = len(test_texts) * 0.01  # 估算每个样本0.01秒
             self.result_text.insert(tk.END, f"预估测试时间: {estimated_time:.1f}秒\n")
         
+        self.root.update()
+        
+        # 评估
         for i, (text, true_label) in enumerate(zip(test_texts, test_labels)):
             try:
                 s = SnowNLP(text)
@@ -2530,7 +2650,11 @@ class SnowNLPTrainerGUI:
             
             # 查找目标文件
             target_files = []
-            for fname in ['sentiment.marshal', 'sentiment.marshal.3']:
+            if sys.version_info[0] >= 3:
+                model_names = ['sentiment.marshal.3']
+            else:
+                model_names = ['sentiment.marshal']
+            for fname in model_names:
                 fpath = os.path.join(sentiment_dir, fname)
                 if os.path.exists(fpath):
                     target_files.append(fpath)
@@ -2556,7 +2680,11 @@ class SnowNLPTrainerGUI:
             sentiment_dir = os.path.join(snownlp_dir, 'sentiment')
             
             backup_files = []
-            for fname in ['sentiment.marshal', 'sentiment.marshal.3']:
+            if sys.version_info[0] >= 3:
+                model_names = ['sentiment.marshal.3']
+            else:
+                model_names = ['sentiment.marshal']
+            for fname in model_names:
                 fpath = os.path.join(sentiment_dir, fname)
                 if os.path.exists(fpath):
                     backup_path = fpath + '.temp_backup'
@@ -2583,7 +2711,7 @@ class SnowNLPTrainerGUI:
             
         except Exception as e:
             self.log(f"模型恢复失败: {e}")
-
+    
     def manual_replace_model(self):
         """手动替换模型"""
         # 在新线程中执行
@@ -2598,18 +2726,29 @@ class SnowNLPTrainerGUI:
         
         try:
             # 1. 检查可能的源文件
-            possible_files = [
-                'custom_sentiment.marshal.3',
-                'sentiment.marshal',
-                'sentiment.marshal.3',
-                'custom_sentiment.model'
-            ]
+            if sys.version_info[0] >= 3:
+                possible_files = [
+                    'custom_sentiment.marshal.3',
+                    'sentiment.marshal.3',
+                    'custom_sentiment.model'
+                ]
+            else:
+                possible_files = [
+                    'custom_sentiment.marshal',
+                    'sentiment.marshal',
+                    'custom_sentiment.model'
+                ]
             
             source_file = None
             for fname in possible_files:
                 if os.path.exists(fname):
                     file_size = os.path.getsize(fname)
                     self.result_text.insert(tk.END, f"找到模型文件: {fname} ({file_size:,} 字节)\n")
+                    if fname.endswith(".marshal") or fname.endswith(".marshal.3"):
+                        err = validate_marshal_model_file(fname)
+                        if err:
+                            self.result_text.insert(tk.END, f"⚠️ 跳过无效模型文件: {err}\n")
+                            continue
                     if file_size > 50000:  # 选择较大的文件
                         source_file = fname
                         break
@@ -2631,7 +2770,11 @@ class SnowNLPTrainerGUI:
             
             # 3. 查找目标文件
             target_files = []
-            for fname in ['sentiment.marshal', 'sentiment.marshal.3']:
+            if sys.version_info[0] >= 3:
+                target_names = ['sentiment.marshal.3']
+            else:
+                target_names = ['sentiment.marshal']
+            for fname in target_names:
                 fpath = os.path.join(sentiment_dir, fname)
                 if os.path.exists(fpath):
                     target_files.append(fpath)

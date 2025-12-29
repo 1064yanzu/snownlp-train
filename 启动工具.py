@@ -9,6 +9,7 @@ import os
 import subprocess
 import platform
 import time
+from snownlp_model_utils import get_snownlp_sentiment_dir
 
 def print_banner():
     """打印程序信息"""
@@ -49,6 +50,19 @@ def check_dependencies():
         except ImportError:
             print(f"❌ {name} 未安装")
             missing_required.append(name)
+        except Exception as e:
+            if module == "snownlp":
+                print("❌ snownlp 导入失败，可能是 sentiment 模型文件损坏或与当前 Python 不兼容")
+                print(f"详细错误: {e}")
+                sentiment_dir = get_snownlp_sentiment_dir()
+                if sentiment_dir:
+                    print(f"📁 SnowNLP sentiment 目录: {sentiment_dir}")
+                    print("💡 可尝试恢复：")
+                    print("- 若存在 sentiment.marshal.3.backup_gui / sentiment.marshal.backup_gui，复制回原文件名")
+                    print("- 或重装 snownlp（恢复官方模型）")
+                return
+            print(f"❌ {name} 导入失败: {e}")
+            return
     
     # 检查可选包
     for name, module in optional_packages.items():

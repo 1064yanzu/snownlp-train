@@ -16,6 +16,11 @@ import json
 import random
 
 from app_logger import dir_writable, disk_free_bytes, get_log_file_path, get_logger, runtime_summary
+from snownlp_model_utils import (
+    get_snownlp_sentiment_dir,
+    safe_replace_snownlp_model,
+    validate_marshal_model_file,
+)
 
 CLI_LOGGER = get_logger("cli")
 CLI_LOG_FILE = get_log_file_path(CLI_LOGGER)
@@ -48,6 +53,19 @@ def check_dependencies():
         except ImportError:
             print(f"❌ {name} 未安装")
             missing.append(module)
+        except Exception as e:
+            if module == "snownlp":
+                print("❌ snownlp 导入失败，可能是 sentiment 模型文件损坏或与当前 Python 不兼容")
+                print(f"详细错误: {e}")
+                sentiment_dir = get_snownlp_sentiment_dir()
+                if sentiment_dir:
+                    print(f"📁 SnowNLP sentiment 目录: {sentiment_dir}")
+                    print("💡 可尝试恢复：")
+                    print("- 若存在 sentiment.marshal.3.backup_gui / sentiment.marshal.backup_gui，复制回原文件名")
+                    print("- 或重装 snownlp（恢复官方模型）")
+                return False
+            print(f"❌ {name} 导入失败: {e}")
+            return False
     
     if missing:
         print(f"\n📦 安装缺失依赖...")
@@ -255,16 +273,39 @@ def train_model(neg_path, pos_path):
         print("🔄 SnowNLP核心算法训练中...")
         sentiment.train(neg_path, pos_path)
         
+        try:
+            sentiment.save("custom_sentiment.marshal")
+        except Exception:
+            pass
+         
         elapsed = time.time() - start_time
         print(f"✅ 模型训练完成! 耗时: {elapsed:.1f}秒")
-        
+         
         # 查找生成的模型文件
-        model_files = []
-        for pattern in ['*.marshal*', 'custom_sentiment.*']:
-            model_files.extend(glob(pattern))
-        
-        if model_files:
-            largest_file = max(model_files, key=os.path.getsize)
+        if sys.version_info[0] >= 3:
+            candidates = [
+                "custom_sentiment.marshal.3",
+                "sentiment.marshal.3",
+            ]
+        else:
+            candidates = [
+                "custom_sentiment.marshal",
+                "sentiment.marshal",
+            ]
+        candidates.extend(glob("custom_sentiment.*"))
+
+        valid_files: list[str] = []
+        for path in candidates:
+            if not path or not os.path.exists(path):
+                continue
+            if path.endswith(".marshal") or path.endswith(".marshal.3"):
+                err = validate_marshal_model_file(path)
+                if err:
+                    continue
+            valid_files.append(path)
+
+        if valid_files:
+            largest_file = max(valid_files, key=os.path.getsize)
             size = os.path.getsize(largest_file)
             print(f"📦 找到模型文件: {largest_file} ({size:,} 字节)")
             try:
@@ -275,7 +316,7 @@ def train_model(neg_path, pos_path):
         else:
             print("❌ 未找到生成的模型文件")
             try:
-                CLI_LOGGER.error("cli_no_model_file patterns=%s", ['*.marshal*', 'custom_sentiment.*'])
+                CLI_LOGGER.error("cli_no_model_file candidates=%s", candidates)
             except Exception:
                 pass
             return None
@@ -293,12 +334,13 @@ def train_model(neg_path, pos_path):
 def replace_model(model_file):
     """替换系统模型"""
     print(f"\n🔄 部署新模型...")
-    
+     
     try:
-        import snownlp
-        snownlp_dir = os.path.dirname(snownlp.__file__)
-        sentiment_dir = os.path.join(snownlp_dir, 'sentiment')
-        
+        sentiment_dir = get_snownlp_sentiment_dir()
+        if not sentiment_dir:
+            print("❌ 未定位到 SnowNLP sentiment 目录")
+            return False
+         
         print(f"📁 SnowNLP目录: {sentiment_dir}")
         try:
             CLI_LOGGER.info(
@@ -311,50 +353,30 @@ def replace_model(model_file):
             )
         except Exception:
             pass
-        
-        # 查找目标文件
-        target_files = []
-        for fname in ['sentiment.marshal', 'sentiment.marshal.3']:
-            fpath = os.path.join(sentiment_dir, fname)
-            if os.path.exists(fpath):
-                target_files.append(fpath)
-        
-        if not target_files:
-            print("❌ 未找到目标模型文件")
+        replace_result = safe_replace_snownlp_model(
+            source_model_file=model_file,
+            sentiment_dir=sentiment_dir,
+            replace_legacy_py2_file=False,
+        )
+
+        if not replace_result.success:
+            print(f"❌ 模型部署失败: {replace_result.error}")
+            return False
+
+        for fname in replace_result.replaced_files:
+            target_path = os.path.join(sentiment_dir, fname)
             try:
-                CLI_LOGGER.error("cli_no_target_files sentiment_dir=%s", os.path.abspath(sentiment_dir))
+                size = os.path.getsize(target_path)
+            except Exception:
+                size = 0
+            print(f"✅ 替换: {fname} ({size:,} 字节)")
+            try:
+                CLI_LOGGER.info("cli_replace_ok target=%s size=%s", os.path.abspath(target_path), size)
             except Exception:
                 pass
-            return False
-        
-        # 备份原文件
-        backup_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-        for target_file in target_files:
-            backup_file = f"{target_file}.backup_{backup_time}"
-            shutil.copy2(target_file, backup_file)
-            print(f"📋 备份: {os.path.basename(backup_file)}")
-        
-        # 替换模型
-        success_count = 0
-        for target_file in target_files:
-            try:
-                shutil.copy2(model_file, target_file)
-                size = os.path.getsize(target_file)
-                print(f"✅ 替换: {os.path.basename(target_file)} ({size:,} 字节)")
-                try:
-                    CLI_LOGGER.info("cli_replace_ok target=%s size=%s", os.path.abspath(target_file), size)
-                except Exception:
-                    pass
-                success_count += 1
-            except Exception as e:
-                print(f"❌ 替换失败 {os.path.basename(target_file)}: {e}")
-                try:
-                    CLI_LOGGER.exception("cli_replace_failed target=%s", os.path.abspath(target_file))
-                except Exception:
-                    pass
-        
-        return success_count > 0
-        
+
+        return True
+         
     except Exception as e:
         print(f"❌ 模型部署失败: {e}")
         try:
